@@ -1,0 +1,17 @@
+node_modules
+.next
+.git
+.gitignore
+.vscode
+
+README.md
+
+Dockerfile
+
+.env
+.env.local
+.env.development
+.env.production
+
+npm-debug.log
+pnpm-debug.log

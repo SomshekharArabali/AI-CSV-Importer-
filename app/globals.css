@@ -1,14 +1,47 @@
 :root {
   --bg: #f8fafc;
+  --bg-gradient-start: #f8fafc;
+  --bg-gradient-end: #f1f5f9;
   --surface: #ffffff;
   --surface-strong: #f1f5f9;
   --border: #e2e8f0;
+  --row-border: rgba(15, 23, 42, 0.08);
+  --row-stripe: rgba(148, 163, 184, 0.08);
   --text: #0f172a;
   --muted: #64748b;
   --accent: #3b82f6;
   --accent-dark: #1e40af;
   --success: #10b981;
+  --danger-bg: rgba(239, 68, 68, 0.08);
+  --danger-border: rgba(239, 68, 68, 0.2);
+  --danger-text: #991b1b;
   --shadow: 0 10px 40px rgba(15, 23, 42, 0.08);
+
+  color-scheme: light;
+}
+
+/* Dark theme overrides, toggled via data-theme="dark" on <html>.
+   See components/theme-toggle.tsx and the inline script in app/layout.tsx. */
+[data-theme="dark"] {
+  --bg: #0b0f19;
+  --bg-gradient-start: #0b0f19;
+  --bg-gradient-end: #10162a;
+  --surface: #131a2b;
+  --surface-strong: #171f34;
+  --border: #26304a;
+  --row-border: rgba(226, 232, 240, 0.08);
+  --row-stripe: rgba(255, 255, 255, 0.03);
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #60a5fa;
+  --accent-dark: #93c5fd;
+  --success: #34d399;
+  --danger-bg: rgba(248, 113, 113, 0.1);
+  --danger-border: rgba(248, 113, 113, 0.25);
+  --danger-text: #fca5a5;
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+
+  color-scheme: dark;
 }
 
 * {
@@ -22,9 +55,10 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  background: linear-gradient(135deg, var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", sans-serif;
+  transition: background-color 200ms ease, color 200ms ease;
 }
 
 button,
@@ -44,6 +78,33 @@ input {
   border-radius: 16px;
   background: linear-gradient(135deg, rgba(59, 130, 246, 0.05), rgba(30, 64, 175, 0.03));
   box-shadow: var(--shadow);
+}
+
+.hero-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.theme-toggle:hover:not(:disabled) {
+  background: var(--surface-strong);
+  transform: translateY(-1px);
+  box-shadow: none;
 }
 
 .hero h1 {
@@ -165,7 +226,7 @@ table {
 th,
 td {
   padding: 14px 16px;
-  border-bottom: 1px solid rgba(78, 55, 36, 0.09);
+  border-bottom: 1px solid var(--row-border);
   text-align: left;
   font-size: 0.95rem;
   vertical-align: top;
@@ -174,13 +235,13 @@ td {
 th {
   position: sticky;
   top: 0;
-  background: #f1f5f9;
+  background: var(--surface-strong);
   font-weight: 700;
   z-index: 1;
 }
 
 tbody tr:nth-child(odd) {
-  background: rgba(253, 248, 239, 0.6);
+  background: var(--row-stripe);
 }
 
 .action-row {
@@ -229,9 +290,9 @@ button:disabled {
 
 .error-banner {
   margin-top: 16px;
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.2);
-  color: #991b1b;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  color: var(--danger-text);
   padding: 18px;
   border-radius: 8px;
 }
@@ -268,8 +329,8 @@ button:disabled {
 
 .skipped-shell {
   margin-top: 18px;
-  background: rgba(239, 68, 68, 0.05);
-  border: 1px solid rgba(239, 68, 68, 0.15);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
   border-radius: 10px;
 }
 

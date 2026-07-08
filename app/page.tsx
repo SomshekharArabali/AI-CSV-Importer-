@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import Papa from "papaparse";
 import { crmFieldLabels, crmFieldOrder } from "@/lib/crm";
 import type { CRMRecord, ImportApiResponse, PreviewRow } from "@/lib/types";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const previewLimit = 50; // README performance note: first 50 rows shown in preview
 
@@ -189,7 +190,10 @@ export default function HomePage() {
   return (
     <main className="page">
       <section className="hero">
-        <p className="eyebrow">GrowEasy Assignment</p>
+        <div className="hero-top">
+          <p className="eyebrow">GrowEasy Assignment</p>
+          <ThemeToggle />
+        </div>
         <h1>AI CSV importer for messy lead exports.</h1>
         <p className="hero-copy">
           Upload any valid lead CSV, preview it instantly, confirm when you&apos;re ready, and
