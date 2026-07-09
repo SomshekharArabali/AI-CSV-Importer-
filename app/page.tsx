@@ -3,29 +3,26 @@
 import { useState, useTransition } from "react";
 import Papa from "papaparse";
 import { crmFieldLabels, crmFieldOrder } from "@/lib/crm";
-import type { CRMRecord, ImportApiResponse, PreviewRow } from "@/lib/types";
+import { splitNdjsonLines } from "@/lib/stream";
+import { formatCell, progressPercent, summarizeResult } from "@/lib/ui-helpers";
+import type { CRMRecord, ImportApiResponse, ImportStreamEvent, PreviewRow } from "@/lib/types";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 const previewLimit = 50; // README performance note: first 50 rows shown in preview
 
-function formatCell(value: unknown) {
-  if (value === null || value === undefined || String(value).trim() === "") {
-    return "-";
-  }
-  return String(value);
+interface ImportProgress {
+  batchIndex: number;
+  batchCount: number;
+  processedRows: number;
+  totalRows: number;
 }
 
-function summarizeResult(result: ImportApiResponse | null) {
-  if (!result) {
-    return null;
-  }
-
-  return [
-    { label: "Total Imported", value: result.meta.importedCount },
-    { label: "Total Skipped", value: result.meta.skippedCount },
-    { label: "Processed", value: result.meta.processedCount },
-    { label: "Batches", value: result.meta.batchCount }
-  ];
+interface RetryNotice {
+  batchIndex: number;
+  batchCount: number;
+  attempt: number;
+  maxAttempts: number;
+  reason: string;
 }
 
 function ResultTable({ records }: { records: CRMRecord[] }) {
@@ -86,6 +83,58 @@ function PreviewTable({ headers, rows }: { headers: string[]; rows: PreviewRow[]
   );
 }
 
+/** Progress bar for the (usually brief) incremental CSV-parsing phase. */
+function ParsingProgressBar({ percent, rowsParsed }: { percent: number; rowsParsed: number }) {
+  return (
+    <div className="progress-shell" role="status" aria-live="polite">
+      <div className="progress-header">
+        <span>Reading CSV&hellip;</span>
+        <span>
+          {rowsParsed} row{rowsParsed === 1 ? "" : "s"} parsed &middot; {percent}%
+        </span>
+      </div>
+      <div className="progress-track">
+        <div className="progress-fill" style={{ width: `${percent}%` }} />
+      </div>
+    </div>
+  );
+}
+
+/** Progress bar for the batched-AI-extraction phase, with a retry notice. */
+function ImportProgressBar({
+  progress,
+  retryNotice
+}: {
+  progress: ImportProgress;
+  retryNotice: RetryNotice | null;
+}) {
+  const pct = progressPercent(progress.processedRows, progress.totalRows);
+
+  return (
+    <div className="progress-shell" role="status" aria-live="polite">
+      <div className="progress-header">
+        <span>
+          Batch {Math.min(progress.batchIndex, progress.batchCount)} of {progress.batchCount}
+        </span>
+        <span>
+          {progress.processedRows} / {progress.totalRows} rows &middot; {pct}%
+        </span>
+      </div>
+      <div className="progress-track">
+        <div className="progress-fill" style={{ width: `${pct}%` }} />
+      </div>
+      {retryNotice ? (
+        <p className="retry-notice">
+          Batch {retryNotice.batchIndex} hit an error ({retryNotice.reason}) — retrying, attempt{" "}
+          {retryNotice.attempt + 1} of {retryNotice.maxAttempts}&hellip;
+        </p>
+      ) : (
+        <p className="helper-text">AI is mapping your CSV rows into CRM fields...</p>
+      )}
+    </div>
+  );
+}
+
 export default function HomePage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewHeaders, setPreviewHeaders] = useState<string[]>([]);
@@ -93,6 +142,12 @@ export default function HomePage() {
   const [previewRowCount, setPreviewRowCount] = useState(0);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportApiResponse | null>(null);
+  const [parsingProgress, setParsingProgress] = useState<{
+    percent: number;
+    rowsParsed: number;
+  } | null>(null);
+  const [progress, setProgress] = useState<ImportProgress | null>(null);
+  const [retryNotice, setRetryNotice] = useState<RetryNotice | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isPending, startTransition] = useTransition();
 
@@ -101,6 +156,9 @@ export default function HomePage() {
   const parsePreview = (file: File) => {
     setPreviewError(null);
     setResult(null);
+    setParsingProgress(null);
+    setProgress(null);
+    setRetryNotice(null);
 
     Papa.parse<PreviewRow>(file, {
       header: true,
@@ -159,6 +217,10 @@ export default function HomePage() {
     startTransition(() => {
       void (async () => {
         setPreviewError(null);
+        setResult(null);
+        setParsingProgress(null);
+        setProgress(null);
+        setRetryNotice(null);
 
         try {
           const formData = new FormData();
@@ -169,19 +231,89 @@ export default function HomePage() {
             body: formData
           });
 
-          const payload = (await response.json()) as ImportApiResponse | { error: string };
+          const contentType = response.headers.get("Content-Type") ?? "";
 
-          if (!response.ok || "error" in payload) {
-            const message = "error" in payload ? payload.error : "Import failed.";
-            throw new Error(message);
+          // Early validation failures (bad file, empty CSV, etc.) come back
+          // as a single plain JSON error instead of a stream.
+          if (contentType.includes("application/json")) {
+            const payload = (await response.json()) as { error?: string };
+            throw new Error(payload.error || "Import failed.");
           }
 
-          setResult(payload);
+          if (!response.ok || !response.body) {
+            throw new Error("Import failed. Please try again.");
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let finalResult: ImportApiResponse | null = null;
+          let streamError: string | null = null;
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              break;
+            }
+
+            buffer += decoder.decode(value, { stream: true });
+            const { events, remainder } = splitNdjsonLines<ImportStreamEvent>(buffer);
+            buffer = remainder;
+
+            for (const event of events) {
+              if (event.type === "parsing") {
+                setParsingProgress({ percent: event.percent, rowsParsed: event.rowsParsed });
+              } else if (event.type === "start") {
+                setParsingProgress(null);
+                setProgress({
+                  batchIndex: 0,
+                  batchCount: event.batchCount,
+                  processedRows: 0,
+                  totalRows: event.totalRows
+                });
+              } else if (event.type === "retrying") {
+                setRetryNotice({
+                  batchIndex: event.batchIndex,
+                  batchCount: event.batchCount,
+                  attempt: event.attempt,
+                  maxAttempts: event.maxAttempts,
+                  reason: event.reason
+                });
+              } else if (event.type === "progress") {
+                setRetryNotice(null);
+                setProgress({
+                  batchIndex: event.batchIndex,
+                  batchCount: event.batchCount,
+                  processedRows: event.processedRows,
+                  totalRows: event.totalRows
+                });
+              } else if (event.type === "complete") {
+                const { type: _type, ...rest } = event;
+                finalResult = rest;
+              } else if (event.type === "error") {
+                streamError = event.message;
+              }
+            }
+          }
+
+          if (streamError) {
+            throw new Error(streamError);
+          }
+
+          if (!finalResult) {
+            throw new Error("Import finished without a result. Please retry.");
+          }
+
+          setResult(finalResult);
         } catch (error) {
           setResult(null);
           setPreviewError(
             error instanceof Error ? error.message : "Import failed. Please try again."
           );
+        } finally {
+          setParsingProgress(null);
+          setProgress(null);
+          setRetryNotice(null);
         }
       })();
     });
@@ -256,6 +388,15 @@ export default function HomePage() {
                 {isPending ? "Importing..." : "Confirm Import"}
               </button>
             </div>
+            {isPending && parsingProgress ? (
+              <ParsingProgressBar
+                percent={parsingProgress.percent}
+                rowsParsed={parsingProgress.rowsParsed}
+              />
+            ) : null}
+            {isPending && progress ? (
+              <ImportProgressBar progress={progress} retryNotice={retryNotice} />
+            ) : null}
           </>
         ) : (
           <div className="placeholder-card">

@@ -162,6 +162,78 @@ pnpm dev
 | `GEMINI_API_KEY` | Yes | Used server-side to call the free-tier Gemini API. |
 | `GROWEASY_AI_MODEL` | No | Overrides the model id (defaults to `gemini-2.5-flash`). |
 
+## Progress indicators
+
+`POST /api/import` streams newline-delimited JSON (NDJSON) instead of waiting for the whole
+import to finish. There are two phases, each with its own progress:
+
+**1. Incremental CSV parsing** — the CSV is parsed one row at a time (PapaParse's `step`
+mode) rather than all at once, so a `parsing` event streams back as the file is read:
+
+```
+{"type":"parsing","rowsParsed":100,"percent":41}
+{"type":"parsing","rowsParsed":200,"percent":83}
+{"type":"parsing","rowsParsed":240,"percent":100}
+```
+
+**2. Batched AI extraction**, with retries:
+
+```
+{"type":"start","batchCount":4,"totalRows":97}
+{"type":"progress","batchIndex":1,"batchCount":4,"processedRows":25,"totalRows":97}
+{"type":"retrying","batchIndex":2,"batchCount":4,"attempt":1,"maxAttempts":3,"reason":"..."}
+{"type":"progress","batchIndex":2,"batchCount":4,"processedRows":50,"totalRows":97}
+...
+{"type":"complete","records":[...],"skipped":[...],"meta":{...}}
+```
+
+The UI (`app/page.tsx`) reads this stream and shows a live progress bar for each phase —
+rows parsed while reading the file, then current batch / rows processed / retry status while
+the AI works — instead of a single spinner with no feedback. Validation failures that can be
+caught before any real work starts (no file, file too large) still short-circuit with a plain
+JSON `{ "error": "..." }` response before streaming begins; anything discovered mid-stream
+(malformed CSV, empty file) is reported as an `{"type":"error", ...}` event instead.
+
+## Retry mechanism for failed AI batches
+
+Each batch's Gemini call goes through `withRetry` (`lib/import-helpers.ts`): up to
+`MAX_BATCH_ATTEMPTS` (3) attempts, with exponential backoff between them (500ms, 1000ms, ...).
+Transient failures — rate limits, network blips, a response that got cut off — get a couple of
+extra chances before the batch's rows are given up on. Only after every attempt fails are the
+batch's rows marked `skipped`, tagged with the underlying error message so it's clear why. The
+client sees each retry as a `"retrying"` event and shows which attempt is in progress without
+losing the overall batch/row progress already shown.
+
+## Testing
+
+Unit tests (Vitest) cover the pure logic behind the import pipeline and the UI:
+
+- `lib/import-helpers.ts` — CSV batching, AI-response sanitization, enum enforcement,
+  JSON-array extraction from a raw model response, the retry/backoff helper, and incremental
+  CSV parsing (progress reporting + fatal-error detection).
+- `lib/stream.ts` — NDJSON buffer splitting used to read the progress stream.
+- `lib/ui-helpers.ts` — cell formatting, summary stats, progress percentage.
+- `lib/crm.ts` — keeps the CRM field schema in sync across `types.ts` / `crm.ts`.
+
+```bash
+pnpm test        # run once
+pnpm test:watch  # watch mode
+```
+
+## Docker
+
+```bash
+docker build -t ai-csv-importer .
+docker run --rm -p 3000:3000 -e GEMINI_API_KEY=your-key ai-csv-importer
+```
+
+The image is a 3-stage build (`deps` → `builder` → `runner`) that produces Next.js's
+[standalone output](https://nextjs.org/docs/app/api-reference/config/next-config-js/output),
+so the final runtime image ships only the traced production `node_modules` — not the full
+dependency tree or any build tooling — and runs as a non-root user. `pnpm` is pinned to an
+exact version via `packageManager` in `package.json` so `corepack` always resolves a version
+compatible with the committed lockfile.
+
 ## Performance
 
 - **File size limit**: 10MB

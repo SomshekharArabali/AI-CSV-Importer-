@@ -62,3 +62,29 @@ export interface ImportApiResponse {
     batchCount: number;
   };
 }
+
+/**
+ * `/api/import` streams newline-delimited JSON (NDJSON): one of these
+ * events per line, so the UI can show live progress while the AI works
+ * through each batch instead of waiting silently for the whole import.
+ */
+export type ImportStreamEvent =
+  | { type: "parsing"; rowsParsed: number; percent: number }
+  | { type: "start"; batchCount: number; totalRows: number }
+  | {
+      type: "progress";
+      batchIndex: number;
+      batchCount: number;
+      processedRows: number;
+      totalRows: number;
+    }
+  | {
+      type: "retrying";
+      batchIndex: number;
+      batchCount: number;
+      attempt: number;
+      maxAttempts: number;
+      reason: string;
+    }
+  | ({ type: "complete" } & ImportApiResponse)
+  | { type: "error"; message: string };
